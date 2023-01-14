@@ -1,0 +1,19 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "yarn copy:fonts && yarn copy:css && npx postcss ./src/input.css -o ./public/output.css",
+    "copy:fonts": "mkdir -p ./public/fonts && cp ./node_modules/@fontsource/jetbrains-mono/files/{*.woff,*.woff2} ./public/fonts",
+    "copy:css": "cp ./node_modules/@fontsource/jetbrains-mono/latin.css ./src/fonts.css && sed -i 's/files/fonts/g' ./src/fonts.css",
+    "expose": "rm -rf ../public && cp -r ./public ../public && sed -i 's/output/{{ public }}output/g' ../public/index.html",
+    "watch": "npx chokidar './public/index.html' './src/input.css' -c 'yarn build && yarn expose'"
+  },
+  "devDependencies": {
+    "chokidar-cli": "3.0.0",
+    "cssnano": "5.1.14",
+    "@fontsource/jetbrains-mono": "4.5.11",
+    "postcss": "8.4.20",
+    "postcss-cli": "10.1.0",
+    "postcss-import": "15.1.0",
+    "tailwindcss": "3.2.4"
+  }
+}
