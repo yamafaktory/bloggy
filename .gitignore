@@ -2,6 +2,6 @@
 .idea/
 /public
 /target
-/template/node-modules
+/template/node_modules
 yarn-debug.log*
 yarn-error.log*
