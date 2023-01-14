@@ -18,16 +18,16 @@ use std::{
     collections::HashMap,
     fmt,
     net::SocketAddr,
-    path::{Path as StdPath, PathBuf},
-    sync::Arc,
+    path::Path as StdPath,
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 use tokio::{
-    fs::{create_dir_all, read_dir, read_to_string, File},
-    io::{AsyncReadExt, Error},
+    fs::{create_dir_all, read_dir, read_to_string},
+    io,
     runtime::Handle,
-    sync::{mpsc, oneshot, Mutex},
+    sync::mpsc::{channel, Receiver, Sender},
 };
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -70,6 +70,18 @@ struct AppState {
     root_template: Arc<Mutex<String>>,
 }
 
+// impl AppState {
+//     async fn get_posts_read_guard(self) -> OwnedRwLockReadGuard<HashMap<String, Post>> {
+//         self.posts.read_owned().await
+//     }
+// }
+//
+// impl AppState {
+//     async fn get_root_template_read_guard(self) -> OwnedRwLockReadGuard<String> {
+//         self.root_template.read_owned().await
+//     }
+// }
+
 #[derive(Deserialize)]
 struct CreateUser {
     username: String,
@@ -94,8 +106,9 @@ enum TemplateKind {
 
 async fn templates_manager(
     posts: Arc<Mutex<HashMap<String, Post>>>,
-) -> Result<mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>> {
-    let (sender, mut rx) = mpsc::channel::<(TemplateKind, oneshot::Sender<String>)>(1);
+) -> Result<(Sender<TemplateKind>, Receiver<String>)> {
+    let (sender, mut rx) = channel::<TemplateKind>(1);
+    let (tx, receiver) = channel::<String>(1);
 
     // Prepare the environment and add the main template.
     let mut env = Environment::new();
@@ -109,8 +122,8 @@ async fn templates_manager(
     tokio::spawn(async move {
         let template = env.get_template("index").unwrap();
 
-        while let Some((template_kind, response)) = rx.recv().await {
-            match template_kind {
+        while let Some(contents) = rx.recv().await {
+            match contents {
                 TemplateKind::Post(contents) => {
                     let post = markdown_to_html(&contents, &options);
 
@@ -118,10 +131,10 @@ async fn templates_manager(
                         .render(context!(title => "Title", public => "/public/", is_root => false, post))
                         .unwrap();
 
-                    response.send(rendered_template).unwrap();
+                    tx.send(rendered_template).await?;
                 }
                 TemplateKind::Root => {
-                    let posts = posts.lock().await;
+                    let posts = posts.clone().lock_owned().await;
                     let short_posts = posts
                         .iter()
                         .map(|(name, post)| name)
@@ -133,7 +146,7 @@ async fn templates_manager(
                         )
                         .unwrap();
 
-                    response.send(rendered_template).unwrap();
+                    tx.send(rendered_template).await?;
                 }
             }
         }
@@ -141,11 +154,11 @@ async fn templates_manager(
         Ok::<_, anyhow::Error>(())
     });
 
-    Ok(sender)
+    Ok((sender, receiver))
 }
 
-fn async_watcher() -> notify::Result<(RecommendedWatcher, mpsc::Receiver<notify::Result<Event>>)> {
-    let (tx, rx) = mpsc::channel(1);
+fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Result<Event>>)> {
+    let (tx, rx) = channel(1);
 
     let handle = Handle::current();
 
@@ -163,21 +176,7 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, mpsc::Receiver<notify:
     Ok((watcher, rx))
 }
 
-fn get_name_from_paths(paths: Vec<PathBuf>) -> Option<(String, PathBuf)> {
-    if let Some(path) = paths.last() {
-        if let Some(name) = path.file_stem() {
-            return Some((name.to_string_lossy().into_owned(), path.to_owned()));
-        }
-    }
-
-    None
-}
-
-async fn async_watch<P: AsRef<StdPath>>(
-    path: P,
-    posts: Arc<Mutex<HashMap<String, Post>>>,
-    sender: mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>,
-) -> notify::Result<()> {
+async fn async_watch<P: AsRef<StdPath>>(path: P) -> notify::Result<()> {
     let (mut watcher, mut rx) = async_watcher()?;
 
     watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
@@ -191,47 +190,10 @@ async fn async_watch<P: AsRef<StdPath>>(
                     dbg!("Renamed", event.paths);
                 }
                 EventKind::Create(CreateKind::File) => {
-                    if let Some((name, path)) = get_name_from_paths(event.paths) {
-                        let mut file = File::open(path).await?;
-                        let mut contents = vec![];
-
-                        file.read_to_end(&mut contents).await?;
-
-                        let mut posts = posts.lock().await;
-
-                        let metadata = file.metadata().await?;
-                        let created = MaybeSystemTime::new(metadata.created().ok());
-                        let modified = MaybeSystemTime::new(metadata.modified().ok());
-
-                        let contents = String::from_utf8_lossy(&contents).into_owned();
-
-                        let (tx, rx) = oneshot::channel();
-                        sender
-                            .send((TemplateKind::Post(contents), tx))
-                            .await
-                            .unwrap();
-                        let rendered_template = rx.await.unwrap();
-
-                        posts.insert(
-                            name.to_owned(),
-                            Post {
-                                created,
-                                modified,
-                                rendered_template,
-                            },
-                        );
-
-                        dbg!("Create", name.clone());
-                    }
+                    dbg!("Create", event.paths);
                 }
                 EventKind::Remove(RemoveKind::File) => {
-                    if let Some((name, _)) = get_name_from_paths(event.paths) {
-                        let mut posts = posts.lock().await;
-
-                        posts.remove(&name);
-
-                        dbg!("Delete", name.clone());
-                    }
+                    dbg!("Delete", event.paths);
                 }
                 _ => (),
             },
@@ -252,26 +214,19 @@ async fn main() -> Result<()> {
 
     let posts = Arc::new(Mutex::new(HashMap::<String, Post>::new()));
 
-    let sender = templates_manager(posts.clone()).await?;
+    let updater = templates_manager(posts.clone()).await?;
 
     // Get all posts.
-    let root_template = Arc::new(Mutex::new(
-        generate_initial_templates(posts.clone(), sender.clone()).await?,
-    ));
-
-    let posts_ref = posts.clone();
-
-    // Spawn the watcher task.
-    tokio::spawn(async move {
-        async_watch("./posts", posts_ref, sender).await?;
-
-        Ok::<_, anyhow::Error>(())
-    });
+    let root_template = generate_initial_templates(posts.clone(), updater).await?;
 
     let state = AppState {
         posts,
-        root_template,
+        root_template: Arc::new(Mutex::new(root_template)),
     };
+
+    tokio::spawn(async move {
+        async_watch("./posts").await.unwrap();
+    });
 
     let serve_dir =
         ServeDir::new("./public").not_found_service(ServeFile::new("./public/404.html"));
@@ -296,13 +251,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_error(_err: Error) -> impl IntoResponse {
+async fn handle_error(_err: io::Error) -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong...")
 }
 
 async fn generate_initial_templates(
     posts: Arc<Mutex<HashMap<String, Post>>>,
-    sender: mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>,
+    (sender, mut receiver): (Sender<TemplateKind>, Receiver<String>),
 ) -> Result<String> {
     // Ensure that the directory exists upfront.
     // Note: if the directory already exists, it will be a noop and no error
@@ -323,9 +278,9 @@ async fn generate_initial_templates(
             .unwrap_or_else(|| "no-name".to_owned());
         let contents = read_to_string(dir_entry.path()).await?;
 
-        let (tx, rx) = oneshot::channel();
-        sender.send((TemplateKind::Post(contents), tx)).await?;
-        let rendered_template = rx.await?;
+        sender.send(TemplateKind::Post(contents)).await?;
+
+        let rendered_template = receiver.recv().await.unwrap();
 
         // TODO: sorting.
         posts.insert(
@@ -338,12 +293,9 @@ async fn generate_initial_templates(
         );
     }
 
-    // Unlock the mutex since we need it in the next call.
-    drop(posts);
+    sender.send(TemplateKind::Root).await?;
 
-    let (tx, rx) = oneshot::channel();
-    sender.send((TemplateKind::Root, tx)).await?;
-    let root_template = rx.await?;
+    let root_template = receiver.recv().await.unwrap();
 
     Ok(root_template)
 }
@@ -352,7 +304,7 @@ async fn get_post(
     Path(GetPostParams { id }): Path<GetPostParams>,
     State(state): State<AppState>,
 ) -> Html<String> {
-    let posts_guard = state.posts.lock().await;
+    let posts_guard = state.posts.lock();
     let maybe_post = posts_guard.get(&id);
 
     if let Some(post) = maybe_post {
