@@ -22,8 +22,9 @@
         </li>
       </ul>
     </nav>
+    {% if is_root %}
+
     <main>
-      {% if is_root %}
       <section>
         {%- for post in posts -%}
         <a href="/posts/{{ post.name }}">
@@ -39,7 +40,9 @@
         </a>
         {%- endfor -%}
       </section>
-      {% else %} {{ post }} {% endif %}
     </main>
+    {% else %}
+    <main class="markdown">{{ post }}</main>
+    {% endif %}
   </body>
 </html>

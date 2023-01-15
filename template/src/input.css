@@ -7,11 +7,30 @@
 @layer base {
   /* Layout */
   body {
-    @apply container mx-auto max-w-7xl bg-stone-900 font-jetbrains text-slate-300 p-8 items-start grid lg:grid-flow-col gap-8;
+    @apply bg-core
+      container 
+      font-jetbrains 
+      gap-8
+      grid 
+      items-start 
+      lg:auto-cols-max 
+      lg:grid-cols-1 
+      lg:grid-flow-col 
+      max-w-7xl 
+      mx-auto 
+      p-8
+      text-slate-300;
+  }
+
+  main.markdown {
+    @apply p-8 bg-stone-900;
   }
 
   nav {
-    @apply bg-fuchsia-700 p-8 lg:order-last;
+    @apply bg-fuchsia-700 
+      lg:max-w-fit
+      lg:order-last
+      p-8;
   }
 
   nav > ul {
@@ -27,7 +46,7 @@
   }
 
   section > a {
-    @apply block bg-stone-700 p-8 mb-8 last:mb-0 no-underline;
+    @apply block bg-stone-900 p-8 mb-8 last:mb-0 no-underline;
   }
 
   section > a > article > div {
