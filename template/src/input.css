@@ -5,10 +5,40 @@
 @tailwind utilities;
 
 @layer base {
+  /* Layout */
   body {
-    @apply bg-stone-900 font-jetbrains text-slate-300 p-8;
+    @apply container mx-auto max-w-7xl bg-stone-900 font-jetbrains text-slate-300 p-8 items-start grid lg:grid-flow-col gap-8;
   }
 
+  nav {
+    @apply bg-fuchsia-700 p-8 lg:order-last;
+  }
+
+  nav > ul {
+    @apply list-none m-0;
+  }
+
+  nav > ul > li {
+    @apply inline-block lg:block;
+  }
+
+  nav > ul > li > a {
+    @apply no-underline m-3 text-lg;
+  }
+
+  section > a {
+    @apply block bg-stone-700 p-8 mb-8 last:mb-0 no-underline;
+  }
+
+  section > a > article > div {
+    @apply flex justify-end;
+  }
+
+  section > a > article > div > time {
+    @apply font-medium text-sm rounded-md px-2 py-1 bg-fuchsia-500;
+  }
+
+  /* Markdown */
   a {
     @apply inline-block decoration-fuchsia-700 font-bold underline underline-offset-4;
   }

@@ -12,21 +12,34 @@
     <title>{{ title }}</title>
   </head>
   <body>
-    <!-- prettier-ignore -->
-    {% if is_root %}
-      {%- for post in posts -%}
-    <ul>
-      <li>
-        <a href="/posts/{{ post }}">
-          <!-- prettier-ignore -->
-          {{ post }}
+    <nav>
+      <ul>
+        <li>
+          <a href="/">Home</a>
+        </li>
+        <li>
+          <a href="/about">About</a>
+        </li>
+      </ul>
+    </nav>
+    <main>
+      {% if is_root %}
+      <section>
+        {%- for post in posts -%}
+        <a href="/posts/{{ post.name }}">
+          <article>
+            <h2>{{ post.name }}</h2>
+            <p>{{ post.description }}</p>
+            <div>
+              <time datetime="{{ post.published }}" pubdate="pubdate"
+                >{{ post.date }}</time
+              >
+            </div>
+          </article>
         </a>
-      </li>
-    </ul>
-    <!-- prettier-ignore -->
-    {%- endfor -%}
-    {% else %}
-      {{ post }} 
-    {% endif %}
+        {%- endfor -%}
+      </section>
+      {% else %} {{ post }} {% endif %}
+    </main>
   </body>
 </html>

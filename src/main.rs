@@ -38,6 +38,23 @@ impl MaybeSystemTime {
     fn new(maybe_system_time: Option<SystemTime>) -> Self {
         Self(maybe_system_time)
     }
+
+    fn get(&self) -> String {
+        match self.0 {
+            Some(system_time) => {
+                let offset_date_time: OffsetDateTime = system_time.into();
+
+                offset_date_time.format(&Rfc2822).unwrap()
+            }
+            None => "No date".to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for MaybeSystemTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
 }
 
 #[derive(Debug)]
@@ -47,21 +64,11 @@ struct Post {
     rendered_template: String,
 }
 
-impl fmt::Display for MaybeSystemTime {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self.0 {
-                Some(system_time) => {
-                    let offset_date_time: OffsetDateTime = system_time.into();
-
-                    offset_date_time.format(&Rfc2822).unwrap()
-                }
-                None => "No date".to_owned(),
-            }
-        )
-    }
+#[derive(Debug, Serialize)]
+struct PreviewPost {
+    date: String,
+    description: String,
+    name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -122,14 +129,18 @@ async fn templates_manager(
                 }
                 TemplateKind::Root => {
                     let posts = posts.lock().await;
-                    let short_posts = posts
+                    let preview_posts = posts
                         .iter()
-                        .map(|(name, post)| name)
-                        .collect::<Vec<&String>>();
+                        .map(|(name, post)| PreviewPost {
+                            name: name.to_owned(),
+                            description: "todo".to_owned(),
+                            date: post.created.get(),
+                        })
+                        .collect::<Vec<PreviewPost>>();
 
                     let rendered_template = template
                         .render(
-                            context!(title => "Root", public => "/public/", is_root => true, posts => short_posts),
+                            context!(title => "Root", public => "/public/", is_root => true, posts => preview_posts),
                         )
                         .unwrap();
 
@@ -142,6 +153,19 @@ async fn templates_manager(
     });
 
     Ok(sender)
+}
+
+async fn get_rendered_template(
+    sender: &mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>,
+    kind: TemplateKind,
+) -> Result<String> {
+    let (tx, rx) = oneshot::channel();
+
+    sender.send((kind, tx)).await?;
+
+    let rendered_template = rx.await?;
+
+    Ok(rendered_template)
 }
 
 fn async_watcher() -> notify::Result<(RecommendedWatcher, mpsc::Receiver<notify::Result<Event>>)> {
@@ -323,9 +347,8 @@ async fn generate_initial_templates(
             .unwrap_or_else(|| "no-name".to_owned());
         let contents = read_to_string(dir_entry.path()).await?;
 
-        let (tx, rx) = oneshot::channel();
-        sender.send((TemplateKind::Post(contents), tx)).await?;
-        let rendered_template = rx.await?;
+        let rendered_template =
+            get_rendered_template(&sender, TemplateKind::Post(contents)).await?;
 
         // TODO: sorting.
         posts.insert(
@@ -341,9 +364,7 @@ async fn generate_initial_templates(
     // Unlock the mutex since we need it in the next call.
     drop(posts);
 
-    let (tx, rx) = oneshot::channel();
-    sender.send((TemplateKind::Root, tx)).await?;
-    let root_template = rx.await?;
+    let root_template = get_rendered_template(&sender, TemplateKind::Root).await?;
 
     Ok(root_template)
 }
