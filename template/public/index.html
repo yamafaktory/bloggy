@@ -23,7 +23,6 @@
       </ul>
     </nav>
     {% if is_root %}
-
     <main>
       <section>
         {%- for post in posts -%}
@@ -42,7 +41,7 @@
       </section>
     </main>
     {% else %}
-    <main class="markdown">{{ post }}</main>
+    <main class="markdown">{{ contents }}</main>
     {% endif %}
   </body>
 </html>

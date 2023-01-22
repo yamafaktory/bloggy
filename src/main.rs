@@ -73,6 +73,7 @@ struct PreviewPost {
 
 #[derive(Debug, Clone)]
 struct AppState {
+    about_template: Arc<Mutex<String>>,
     posts: Arc<Mutex<HashMap<String, Post>>>,
     root_template: Arc<Mutex<String>>,
 }
@@ -94,8 +95,14 @@ struct GetPostParams {
 }
 
 #[derive(Debug)]
+struct PostTemplate {
+    contents: String,
+    title: String,
+}
+
+#[derive(Debug)]
 enum TemplateKind {
-    Post(String),
+    Post(PostTemplate),
     Root,
 }
 
@@ -118,11 +125,16 @@ async fn templates_manager(
 
         while let Some((template_kind, response)) = rx.recv().await {
             match template_kind {
-                TemplateKind::Post(contents) => {
-                    let post = markdown_to_html(&contents, &options);
+                TemplateKind::Post(PostTemplate { contents, title }) => {
+                    let contents = markdown_to_html(&contents, &options);
 
                     let rendered_template = template
-                        .render(context!(title => "Title", public => "/public/", is_root => false, post))
+                        .render(context!(
+                            contents,
+                            is_root => false,
+                            public => "/public/",
+                            title,
+                        ))
                         .unwrap();
 
                     response.send(rendered_template).unwrap();
@@ -132,16 +144,19 @@ async fn templates_manager(
                     let preview_posts = posts
                         .iter()
                         .map(|(name, post)| PreviewPost {
-                            name: name.to_owned(),
-                            description: "todo".to_owned(),
                             date: post.created.get(),
+                            description: "todo".to_owned(),
+                            name: name.to_owned(),
                         })
                         .collect::<Vec<PreviewPost>>();
 
                     let rendered_template = template
-                        .render(
-                            context!(title => "Root", public => "/public/", is_root => true, posts => preview_posts),
-                        )
+                        .render(context!(
+                            is_root => true,
+                            posts => preview_posts,
+                            public => "/public/",
+                            title => "Home",
+                        ))
                         .unwrap();
 
                     response.send(rendered_template).unwrap();
@@ -231,7 +246,13 @@ async fn async_watch<P: AsRef<StdPath>>(
 
                         let (tx, rx) = oneshot::channel();
                         sender
-                            .send((TemplateKind::Post(contents), tx))
+                            .send((
+                                TemplateKind::Post(PostTemplate {
+                                    contents,
+                                    title: name.to_owned(),
+                                }),
+                                tx,
+                            ))
                             .await
                             .unwrap();
                         let rendered_template = rx.await.unwrap();
@@ -266,6 +287,11 @@ async fn async_watch<P: AsRef<StdPath>>(
     Ok(())
 }
 
+struct InitialTemplates {
+    about_template: String,
+    root_template: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing.
@@ -279,9 +305,13 @@ async fn main() -> Result<()> {
     let sender = templates_manager(posts.clone()).await?;
 
     // Get all posts.
-    let root_template = Arc::new(Mutex::new(
-        generate_initial_templates(posts.clone(), sender.clone()).await?,
-    ));
+    let InitialTemplates {
+        about_template,
+        root_template,
+    } = generate_initial_templates(posts.clone(), sender.clone()).await?;
+
+    let about_template = Arc::new(Mutex::new(about_template));
+    let root_template = Arc::new(Mutex::new(root_template));
 
     let posts_ref = posts.clone();
 
@@ -293,6 +323,7 @@ async fn main() -> Result<()> {
     });
 
     let state = AppState {
+        about_template,
         posts,
         root_template,
     };
@@ -303,10 +334,11 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/", get(get_root))
+        .route("/about", get(get_about))
         .route("/posts/:id", get(get_post))
         .route("/post", post(create_post))
-        .nest_service("/public", serve_dir.clone())
-        .fallback_service(serve_dir)
+        .nest_service("/public", serve_dir)
+        .fallback(handler_404)
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3443));
@@ -320,6 +352,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn handler_404() -> impl IntoResponse {
+    (StatusCode::NOT_FOUND, "nothing to see here")
+}
+
 async fn handle_error(_err: Error) -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong...")
 }
@@ -327,7 +363,7 @@ async fn handle_error(_err: Error) -> impl IntoResponse {
 async fn generate_initial_templates(
     posts: Arc<Mutex<HashMap<String, Post>>>,
     sender: mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>,
-) -> Result<String> {
+) -> Result<InitialTemplates> {
     // Ensure that the directory exists upfront.
     // Note: if the directory already exists, it will be a noop and no error
     // will be returned.
@@ -347,8 +383,14 @@ async fn generate_initial_templates(
             .unwrap_or_else(|| "no-name".to_owned());
         let contents = read_to_string(dir_entry.path()).await?;
 
-        let rendered_template =
-            get_rendered_template(&sender, TemplateKind::Post(contents)).await?;
+        let rendered_template = get_rendered_template(
+            &sender,
+            TemplateKind::Post(PostTemplate {
+                contents,
+                title: name.to_owned(),
+            }),
+        )
+        .await?;
 
         // TODO: sorting.
         posts.insert(
@@ -366,7 +408,10 @@ async fn generate_initial_templates(
 
     let root_template = get_rendered_template(&sender, TemplateKind::Root).await?;
 
-    Ok(root_template)
+    Ok(InitialTemplates {
+        about_template: "".to_owned(),
+        root_template,
+    })
 }
 
 async fn get_post(
@@ -381,6 +426,19 @@ async fn get_post(
     } else {
         Html("TODO NO POST FOUND".to_owned())
     }
+}
+
+async fn get_about(State(state): State<AppState>) -> Html<String> {
+    // let posts_guard = state.posts.lock().await;
+    // let maybe_post = posts_guard.get(&id);
+    //
+    // if let Some(post) = maybe_post {
+    //     Html(post.rendered_template.to_owned())
+    // } else {
+    //     Html("TODO NO POST FOUND".to_owned())
+    // }
+
+    Html("TODO".to_owned())
 }
 
 async fn get_root(State(state): State<AppState>) -> Html<String> {
