@@ -74,6 +74,10 @@
     @apply m-0;
   }
 
+  [type='checkbox'] {
+    @apply bg-stone-800 text-fuchsia-700 border-fuchsia-700;
+  }
+
   code {
     @apply rounded-md px-2 py-1;
   }
@@ -84,11 +88,6 @@
 
   pre {
     @apply leading-none p-4 rounded-lg mb-4 max-w-max;
-  }
-
-  code,
-  pre {
-    @apply bg-stone-800;
   }
 
   pre > code {

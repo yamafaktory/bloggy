@@ -7,7 +7,10 @@ use axum::{
     Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use comrak::{markdown_to_html, ComrakOptions};
+use comrak::{
+    markdown_to_html_with_plugins, plugins::syntect::SyntectAdapterBuilder, ComrakOptions,
+    ComrakPlugins,
+};
 use minijinja::{context, Environment};
 use notify::{
     event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
@@ -22,6 +25,7 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
+use syntect::highlighting::ThemeSet;
 use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 use tokio::{
     fs::{create_dir_all, read_dir, read_to_string, File},
@@ -106,6 +110,27 @@ enum TemplateKind {
     Root,
 }
 
+fn contents_to_markdown(contents: String) -> String {
+    let adapter_builder = SyntectAdapterBuilder::new();
+    let mut options = ComrakOptions::default();
+    let mut plugins = ComrakPlugins::default();
+
+    options.extension.autolink = true;
+    options.extension.header_ids = Some("header-".to_owned());
+    options.extension.strikethrough = true;
+    options.extension.table = true;
+    options.extension.tasklist = true;
+    options.render.github_pre_lang = true;
+
+    let mut theme_set = ThemeSet::new();
+    theme_set.add_from_folder("./themes").unwrap();
+    let adapter = adapter_builder.theme_set(theme_set).theme("theme").build();
+
+    plugins.render.codefence_syntax_highlighter = Some(&adapter);
+
+    markdown_to_html_with_plugins(&contents, &options, &plugins)
+}
+
 async fn templates_manager(
     posts: Arc<Mutex<HashMap<String, Post>>>,
 ) -> Result<mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>> {
@@ -116,21 +141,15 @@ async fn templates_manager(
     env.add_template("index", include_str!("../public/index.html"))
         .unwrap();
 
-    let mut options = ComrakOptions::default();
-    options.extension.strikethrough = true;
-    options.extension.table = true;
-
     tokio::spawn(async move {
         let template = env.get_template("index").unwrap();
 
         while let Some((template_kind, response)) = rx.recv().await {
             match template_kind {
                 TemplateKind::Post(PostTemplate { contents, title }) => {
-                    let contents = markdown_to_html(&contents, &options);
-
                     let rendered_template = template
                         .render(context!(
-                            contents,
+                            contents => contents_to_markdown(contents),
                             is_root => false,
                             public => "/public/",
                             title,

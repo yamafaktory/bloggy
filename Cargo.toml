@@ -29,11 +29,16 @@ version = "0.4.4"
 
 [dependencies.minijinja]
 features = ["source"]
-version = "0.28.0"
+version = "0.30.1"
 
 [dependencies.serde]
 features = ["derive"] 
 version = "1.0.152"
+
+
+[dependencies.syntect]
+features = ["plist-load"]
+version= "5.0.0"
 
 [dependencies.time]
 features = ["formatting"] 
