@@ -1,6 +1,6 @@
 use anyhow::Result;
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::{get, get_service, post},
@@ -355,7 +355,7 @@ async fn main() -> Result<()> {
         .route("/", get(get_root))
         .route("/about", get(get_about))
         .route("/posts/:id", get(get_post))
-        .route("/post", post(create_post))
+        .route("/post", post(upload_post))
         .nest_service("/public", serve_dir)
         .fallback(handler_404)
         .with_state(state);
@@ -467,11 +467,19 @@ async fn get_root(State(state): State<AppState>) -> Html<String> {
     Html(root_template)
 }
 
-async fn create_post(Json(payload): Json<CreateUser>) -> impl IntoResponse {
-    let user = User {
-        id: 1337,
-        username: payload.username,
-    };
+async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode, String)> {
+    tracing::info!("Uploading post...");
 
-    (StatusCode::CREATED, Json(user))
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?
+    {
+        dbg!(field.file_name());
+        // let data = field.bytes().await.unwrap();
+        //
+        // println!("Length of `{}` is {} bytes", name, data.len());
+    }
+
+    Ok(StatusCode::CREATED)
 }

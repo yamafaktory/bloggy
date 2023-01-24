@@ -19,7 +19,12 @@
       max-w-7xl 
       mx-auto 
       p-8
+      selection:bg-fuchsia-700
       text-slate-300;
+  }
+
+  main {
+    @apply grid place-content-stretch;
   }
 
   main.markdown {
@@ -63,7 +68,7 @@
   }
 
   blockquote {
-    @apply p-4 border-l-4 border-fuchsia-400 bg-stone-800 max-w-max mb-4;
+    @apply p-4 border-l-4 border-fuchsia-400 bg-stone-800 mb-4;
   }
 
   blockquote > blockquote {
@@ -87,7 +92,7 @@
   }
 
   pre {
-    @apply leading-none p-4 rounded-lg mb-4 max-w-max;
+    @apply leading-none p-4 mb-4 overflow-auto;
   }
 
   pre > code {
