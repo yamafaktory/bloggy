@@ -32,10 +32,13 @@
   }
 
   nav {
-    @apply bg-fuchsia-700 
+    @apply bg-fuchsia-700
+      sticky 
       lg:max-w-fit
       lg:order-last
-      p-8;
+      p-8
+      lg:top-8
+      top-0;
   }
 
   nav > ul {

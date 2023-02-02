@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::{get, get_service, post},
-    Json, Router,
+    Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use comrak::{
@@ -29,7 +29,7 @@ use syntect::highlighting::ThemeSet;
 use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 use tokio::{
     fs::{create_dir_all, read_dir, read_to_string, File},
-    io::{AsyncReadExt, Error},
+    io::{AsyncReadExt, AsyncWriteExt, Error},
     runtime::Handle,
     sync::{mpsc, oneshot, Mutex},
 };
@@ -80,17 +80,6 @@ struct AppState {
     about_template: Arc<Mutex<String>>,
     posts: Arc<Mutex<HashMap<String, Post>>>,
     root_template: Arc<Mutex<String>>,
-}
-
-#[derive(Deserialize)]
-struct CreateUser {
-    username: String,
-}
-
-#[derive(Serialize)]
-struct User {
-    id: u64,
-    username: String,
 }
 
 #[derive(Deserialize)]
@@ -299,7 +288,7 @@ async fn async_watch<P: AsRef<StdPath>>(
                 }
                 _ => (),
             },
-            Err(e) => println!("watch error: {:?}", e),
+            Err(error) => println!("watch error: {error:?}"),
         }
     }
 
@@ -475,10 +464,43 @@ async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?
     {
-        dbg!(field.file_name());
-        // let data = field.bytes().await.unwrap();
-        //
-        // println!("Length of `{}` is {} bytes", name, data.len());
+        let file_name = match field.file_name() {
+            Some(file_name) => file_name.to_owned(),
+            None => {
+                return Err((StatusCode::BAD_REQUEST, "No file name".to_owned()));
+            }
+        };
+
+        match field.bytes().await {
+            Ok(bytes) => {
+                if bytes.is_empty() {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("Empty file: {file_name:?}"),
+                    ));
+                }
+
+                let file_path = format!("./posts/{file_name:?}").to_owned();
+
+                match File::create(file_path).await {
+                    Ok(mut file) => {
+                        if file.write_all(b"hello, world!").await.is_err() {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                "File creation failed".to_owned(),
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        dbg!(err);
+                        return Err((StatusCode::BAD_REQUEST, "File creation failed".to_owned()));
+                    }
+                };
+            }
+            Err(_) => {
+                return Err((StatusCode::BAD_REQUEST, "Empty file".to_owned()));
+            }
+        };
     }
 
     Ok(StatusCode::CREATED)
