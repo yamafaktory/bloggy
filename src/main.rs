@@ -17,6 +17,7 @@ use notify::{
     Config, Event, EventKind, RecommendedWatcher, Watcher,
 };
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::{
     collections::HashMap,
     fmt,
@@ -34,6 +35,7 @@ use tokio::{
     sync::{mpsc, oneshot, Mutex},
 };
 use tower_http::services::{ServeDir, ServeFile};
+use url::form_urlencoded;
 
 #[derive(Debug)]
 struct MaybeSystemTime(Option<SystemTime>);
@@ -456,6 +458,27 @@ async fn get_root(State(state): State<AppState>) -> Html<String> {
     Html(root_template)
 }
 
+fn get_encoded_markdown_file_name(filename: &str) -> Option<String> {
+    let path = StdPath::new(filename);
+
+    // Try to get the extension first.
+    if let Some(extension) = path.extension().and_then(OsStr::to_str) {
+        // We only want markdown files.
+        if extension.to_lowercase() != "md" {
+            return None;
+        }
+
+        // Get the file name and encode it.
+        return path.file_name().and_then(OsStr::to_str).map(|name| {
+            form_urlencoded::Serializer::new(String::new())
+                .append_key_only(name)
+                .finish()
+        });
+    }
+
+    None
+}
+
 async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode, String)> {
     tracing::info!("Uploading post...");
 
@@ -464,23 +487,24 @@ async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?
     {
-        let file_name = match field.file_name() {
-            Some(file_name) => file_name.to_owned(),
-            None => {
-                return Err((StatusCode::BAD_REQUEST, "No file name".to_owned()));
-            }
-        };
+        let markdown_file_name = field.file_name().and_then(get_encoded_markdown_file_name);
+
+        if markdown_file_name.is_none() {
+            return Err((StatusCode::BAD_REQUEST, "Invalid markdown file".to_owned()));
+        }
+
+        let markdown_file_name = markdown_file_name.unwrap();
 
         match field.bytes().await {
             Ok(bytes) => {
                 if bytes.is_empty() {
                     return Err((
                         StatusCode::BAD_REQUEST,
-                        format!("Empty file: {file_name:?}"),
+                        format!("Empty file: {markdown_file_name:?}"),
                     ));
                 }
 
-                let file_path = format!("./posts/{file_name:?}").to_owned();
+                let file_path = format!("./posts/{markdown_file_name:?}").to_owned();
 
                 match File::create(file_path).await {
                     Ok(mut file) => {
@@ -491,8 +515,7 @@ async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode
                             ));
                         }
                     }
-                    Err(err) => {
-                        dbg!(err);
+                    Err(_) => {
                         return Err((StatusCode::BAD_REQUEST, "File creation failed".to_owned()));
                     }
                 };
