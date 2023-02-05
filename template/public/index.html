@@ -26,9 +26,9 @@
     <main>
       <section>
         {%- for post in posts -%}
-        <a href="/posts/{{ post.name }}">
+        <a href="/posts/{{ post.encoded_name }}">
           <article>
-            <h2>{{ post.name }}</h2>
+            <h2>{{ post.original_name }}</h2>
             <p>{{ post.description }}</p>
             <div>
               <time datetime="{{ post.published }}" pubdate="pubdate"

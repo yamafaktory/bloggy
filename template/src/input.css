@@ -6,9 +6,12 @@
 
 @layer base {
   /* Layout */
+  html {
+    @apply bg-core;
+  }
+
   body {
-    @apply bg-core
-      container 
+    @apply container 
       font-jetbrains 
       gap-8
       grid 

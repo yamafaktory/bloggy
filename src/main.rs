@@ -67,6 +67,7 @@ impl fmt::Display for MaybeSystemTime {
 struct Post {
     created: MaybeSystemTime,
     modified: MaybeSystemTime,
+    encoded_name: String,
     rendered_template: String,
 }
 
@@ -74,7 +75,8 @@ struct Post {
 struct PreviewPost {
     date: String,
     description: String,
-    name: String,
+    encoded_name: String,
+    original_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -151,14 +153,21 @@ async fn templates_manager(
                 }
                 TemplateKind::Root => {
                     let posts = posts.lock().await;
-                    let preview_posts = posts
+                    let mut preview_posts = posts
                         .iter()
-                        .map(|(name, post)| PreviewPost {
+                        // Filter out the `about` page.
+                        // Note: we can rely on the encoded name here.
+                        .filter(|(name, _)| *name != "about")
+                        .map(|(original_name, post)| PreviewPost {
                             date: post.created.get(),
                             description: "todo".to_owned(),
-                            name: name.to_owned(),
+                            encoded_name: post.encoded_name.to_owned(),
+                            original_name: original_name.to_owned(),
                         })
                         .collect::<Vec<PreviewPost>>();
+
+                    // TODO: this is just not to forget and might not work!
+                    preview_posts.sort_by(|a, b| a.date.cmp(&b.date));
 
                     let rendered_template = template
                         .render(context!(
@@ -212,21 +221,44 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, mpsc::Receiver<notify:
     Ok((watcher, rx))
 }
 
-fn get_name_from_paths(paths: Vec<PathBuf>) -> Option<(String, PathBuf)> {
-    if let Some(path) = paths.last() {
-        if let Some(name) = path.file_stem() {
-            return Some((name.to_string_lossy().into_owned(), path.to_owned()));
-        }
-    }
-
-    None
+struct MarkdownFile {
+    encoded_name: String,
+    original_name: String,
+    path_buf: PathBuf,
 }
 
-async fn async_watch<P: AsRef<StdPath>>(
+/// Gets the file name from the provided paths.
+/// Returns a the URI encoded file name and the path.
+fn get_name_from_paths<P>(paths: Vec<P>) -> Option<MarkdownFile>
+where
+    P: AsRef<StdPath>,
+{
+    paths.last().and_then(|path| {
+        let path = path.as_ref();
+
+        let mut path_buf = PathBuf::new();
+        path_buf.push(path);
+
+        path.file_stem()
+            .and_then(OsStr::to_str)
+            .map(|name| MarkdownFile {
+                encoded_name: form_urlencoded::Serializer::new(String::new())
+                    .append_key_only(name)
+                    .finish(),
+                original_name: name.to_owned(),
+                path_buf,
+            })
+    })
+}
+
+async fn async_watch<P>(
     path: P,
     posts: Arc<Mutex<HashMap<String, Post>>>,
     sender: mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>,
-) -> notify::Result<()> {
+) -> notify::Result<()>
+where
+    P: AsRef<StdPath>,
+{
     let (mut watcher, mut rx) = async_watcher()?;
 
     watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
@@ -236,12 +268,14 @@ async fn async_watch<P: AsRef<StdPath>>(
     while let Some(res) = rx.recv().await {
         match res {
             Ok(event) => match event.kind {
-                EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
-                    dbg!("Renamed", event.paths);
-                }
                 EventKind::Create(CreateKind::File) => {
-                    if let Some((name, path)) = get_name_from_paths(event.paths) {
-                        let mut file = File::open(path).await?;
+                    if let Some(MarkdownFile {
+                        encoded_name,
+                        original_name,
+                        path_buf,
+                    }) = get_name_from_paths(event.paths)
+                    {
+                        let mut file = File::open(path_buf).await?;
                         let mut contents = vec![];
 
                         file.read_to_end(&mut contents).await?;
@@ -259,7 +293,7 @@ async fn async_watch<P: AsRef<StdPath>>(
                             .send((
                                 TemplateKind::Post(PostTemplate {
                                     contents,
-                                    title: name.to_owned(),
+                                    title: original_name.to_owned(),
                                 }),
                                 tx,
                             ))
@@ -267,25 +301,33 @@ async fn async_watch<P: AsRef<StdPath>>(
                             .unwrap();
                         let rendered_template = rx.await.unwrap();
 
+                        let original_name_clone = original_name.clone();
+
                         posts.insert(
-                            name.to_owned(),
+                            original_name,
                             Post {
                                 created,
+                                encoded_name,
                                 modified,
                                 rendered_template,
                             },
                         );
 
-                        dbg!("Create", name.clone());
+                        dbg!("Create", original_name_clone);
                     }
                 }
                 EventKind::Remove(RemoveKind::File) => {
-                    if let Some((name, _)) = get_name_from_paths(event.paths) {
+                    if let Some(MarkdownFile {
+                        original_name,
+                        encoded_name,
+                        ..
+                    }) = get_name_from_paths(event.paths)
+                    {
                         let mut posts = posts.lock().await;
 
-                        posts.remove(&name);
+                        posts.remove(&encoded_name);
 
-                        dbg!("Delete", name.clone());
+                        dbg!("Delete", original_name.to_owned());
                     }
                 }
                 _ => (),
@@ -383,34 +425,48 @@ async fn generate_initial_templates(
 
     let mut posts = posts.lock().await;
 
+    let mut about_template = String::new();
+
     while let Some(dir_entry) = posts_stream.next_entry().await? {
         let metadata = dir_entry.metadata().await?;
         let created = MaybeSystemTime::new(metadata.created().ok());
         let modified = MaybeSystemTime::new(metadata.modified().ok());
-        let name = StdPath::new(&dir_entry.file_name())
-            .file_stem()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "no-name".to_owned());
+        let file_name = dir_entry.file_name();
+
+        let (encoded_name, original_name) = get_name_from_paths(vec![StdPath::new(&file_name)])
+            .map_or(
+                ("unnamed".to_owned(), "unnamed".to_owned()),
+                |MarkdownFile {
+                     encoded_name,
+                     original_name,
+                     ..
+                 }| (encoded_name, original_name),
+            );
+
         let contents = read_to_string(dir_entry.path()).await?;
 
         let rendered_template = get_rendered_template(
             &sender,
             TemplateKind::Post(PostTemplate {
                 contents,
-                title: name.to_owned(),
+                title: original_name.to_owned(),
             }),
         )
         .await?;
 
-        // TODO: sorting.
-        posts.insert(
-            name,
-            Post {
-                created,
-                modified,
-                rendered_template,
-            },
-        );
+        if original_name == "about" {
+            about_template = rendered_template;
+        } else {
+            posts.insert(
+                original_name,
+                Post {
+                    created,
+                    encoded_name,
+                    modified,
+                    rendered_template,
+                },
+            );
+        }
     }
 
     // Unlock the mutex since we need it in the next call.
@@ -419,7 +475,7 @@ async fn generate_initial_templates(
     let root_template = get_rendered_template(&sender, TemplateKind::Root).await?;
 
     Ok(InitialTemplates {
-        about_template: "".to_owned(),
+        about_template,
         root_template,
     })
 }
@@ -439,16 +495,9 @@ async fn get_post(
 }
 
 async fn get_about(State(state): State<AppState>) -> Html<String> {
-    // let posts_guard = state.posts.lock().await;
-    // let maybe_post = posts_guard.get(&id);
-    //
-    // if let Some(post) = maybe_post {
-    //     Html(post.rendered_template.to_owned())
-    // } else {
-    //     Html("TODO NO POST FOUND".to_owned())
-    // }
+    let about = state.about_template.lock().await;
 
-    Html("TODO".to_owned())
+    Html(about.to_owned())
 }
 
 async fn get_root(State(state): State<AppState>) -> Html<String> {
@@ -458,7 +507,7 @@ async fn get_root(State(state): State<AppState>) -> Html<String> {
     Html(root_template)
 }
 
-fn get_encoded_markdown_file_name(filename: &str) -> Option<String> {
+fn get_markdown_file_name(filename: &str) -> Option<&str> {
     let path = StdPath::new(filename);
 
     // Try to get the extension first.
@@ -468,17 +517,14 @@ fn get_encoded_markdown_file_name(filename: &str) -> Option<String> {
             return None;
         }
 
-        // Get the file name and encode it.
-        return path.file_name().and_then(OsStr::to_str).map(|name| {
-            form_urlencoded::Serializer::new(String::new())
-                .append_key_only(name)
-                .finish()
-        });
+        return path.file_name().and_then(OsStr::to_str);
     }
 
     None
 }
 
+/// TODO
+/// https://docs.rs/axum/latest/src/axum/extract/multipart.rs.html#248
 async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode, String)> {
     tracing::info!("Uploading post...");
 
@@ -487,13 +533,14 @@ async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?
     {
-        let markdown_file_name = field.file_name().and_then(get_encoded_markdown_file_name);
+        let markdown_file_name = field.file_name().and_then(get_markdown_file_name);
 
         if markdown_file_name.is_none() {
             return Err((StatusCode::BAD_REQUEST, "Invalid markdown file".to_owned()));
         }
 
-        let markdown_file_name = markdown_file_name.unwrap();
+        // We can safely unwrap here since this is already handled above.
+        let markdown_file_name = markdown_file_name.unwrap().to_owned();
 
         match field.bytes().await {
             Ok(bytes) => {
@@ -504,11 +551,11 @@ async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode
                     ));
                 }
 
-                let file_path = format!("./posts/{markdown_file_name:?}").to_owned();
+                let file_path = StdPath::new("./posts").join(markdown_file_name);
 
                 match File::create(file_path).await {
                     Ok(mut file) => {
-                        if file.write_all(b"hello, world!").await.is_err() {
+                        if file.write_all(&bytes).await.is_err() {
                             return Err((
                                 StatusCode::BAD_REQUEST,
                                 "File creation failed".to_owned(),

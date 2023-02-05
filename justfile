@@ -3,6 +3,6 @@ create-self-signed-ssl-certificate:
 
 test-upload:
   touch test.md
-  echo "#hi" > test.md
+  echo -e "# Title\nthis is a test 🍰!" > test.md
   curl -i --insecure --form file='@test.md' https://localhost:3443/post
 
