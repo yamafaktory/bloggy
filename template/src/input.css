@@ -93,6 +93,10 @@
     @apply rounded-md px-2 py-1;
   }
 
+  p > code {
+    @apply bg-stone-700;
+  }
+
   hr {
     @apply h-px my-4 bg-fuchsia-300 border-0;
   }

@@ -13,7 +13,7 @@ use comrak::{
 };
 use minijinja::{context, Environment};
 use notify::{
-    event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
+    event::{CreateKind, RemoveKind},
     Config, Event, EventKind, RecommendedWatcher, Watcher,
 };
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ use std::{
 use syntect::highlighting::ThemeSet;
 use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 use tokio::{
-    fs::{create_dir_all, read_dir, read_to_string, File},
+    fs::{create_dir_all, read_dir, read_to_string, remove_file, File},
     io::{AsyncReadExt, AsyncWriteExt, Error},
     runtime::Handle,
     sync::{mpsc, oneshot, Mutex},
@@ -82,12 +82,13 @@ struct PreviewPost {
 #[derive(Debug, Clone)]
 struct AppState {
     about_template: Arc<Mutex<String>>,
+    not_found_template: Arc<Mutex<String>>,
     posts: Arc<Mutex<HashMap<String, Post>>>,
     root_template: Arc<Mutex<String>>,
 }
 
 #[derive(Deserialize)]
-struct GetPostParams {
+struct PostParams {
     id: String,
 }
 
@@ -99,6 +100,7 @@ struct PostTemplate {
 
 #[derive(Debug)]
 enum TemplateKind {
+    NotFound,
     Post(PostTemplate),
     Root,
 }
@@ -139,6 +141,18 @@ async fn templates_manager(
 
         while let Some((template_kind, response)) = rx.recv().await {
             match template_kind {
+                TemplateKind::NotFound => {
+                    let rendered_template = template
+                        .render(context!(
+                            contents => contents_to_markdown("# 404\nPage not found.".to_owned()),
+                            is_root => false,
+                            public => "/public/",
+                            title => "404",
+                        ))
+                        .unwrap();
+
+                    response.send(rendered_template).unwrap();
+                }
                 TemplateKind::Post(PostTemplate { contents, title }) => {
                     let rendered_template = template
                         .render(context!(
@@ -254,6 +268,7 @@ where
 async fn async_watch<P>(
     path: P,
     posts: Arc<Mutex<HashMap<String, Post>>>,
+    root_template: Arc<Mutex<String>>,
     sender: mpsc::Sender<(TemplateKind, oneshot::Sender<String>)>,
 ) -> notify::Result<()>
 where
@@ -263,7 +278,6 @@ where
 
     watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
 
-    // TODO: to update contents -> delete -> create
     // https://github.com/notify-rs/notify/wiki/The-Event-Guide
     while let Some(res) = rx.recv().await {
         match res {
@@ -313,26 +327,32 @@ where
                             },
                         );
 
+                        // Unlock the mutex to avoid a deadlock.
+                        drop(posts);
+
+                        match get_rendered_template(&sender, TemplateKind::Root).await {
+                            Ok(template) => {
+                                *root_template.lock().await = template;
+                            }
+                            Err(error) => eprintln!("watch error: {error:?}"),
+                        }
+
                         dbg!("Create", original_name_clone);
                     }
                 }
                 EventKind::Remove(RemoveKind::File) => {
-                    if let Some(MarkdownFile {
-                        original_name,
-                        encoded_name,
-                        ..
-                    }) = get_name_from_paths(event.paths)
-                    {
-                        let mut posts = posts.lock().await;
-
-                        posts.remove(&encoded_name);
-
-                        dbg!("Delete", original_name.to_owned());
+                    match get_rendered_template(&sender, TemplateKind::Root).await {
+                        Ok(template) => {
+                            *root_template.lock().await = template;
+                        }
+                        Err(error) => eprintln!("watch error: {error:?}"),
                     }
+
+                    dbg!("Delete");
                 }
                 _ => (),
             },
-            Err(error) => println!("watch error: {error:?}"),
+            Err(error) => eprintln!("watch error: {error:?}"),
         }
     }
 
@@ -341,6 +361,7 @@ where
 
 struct InitialTemplates {
     about_template: String,
+    not_found_template: String,
     root_template: String,
 }
 
@@ -359,23 +380,27 @@ async fn main() -> Result<()> {
     // Get all posts.
     let InitialTemplates {
         about_template,
+        not_found_template,
         root_template,
     } = generate_initial_templates(posts.clone(), sender.clone()).await?;
 
     let about_template = Arc::new(Mutex::new(about_template));
+    let not_found_template = Arc::new(Mutex::new(not_found_template));
     let root_template = Arc::new(Mutex::new(root_template));
 
     let posts_ref = posts.clone();
+    let root_template_ref = root_template.clone();
 
     // Spawn the watcher task.
     tokio::spawn(async move {
-        async_watch("./posts", posts_ref, sender).await?;
+        async_watch("./posts", posts_ref, root_template_ref, sender).await?;
 
         Ok::<_, anyhow::Error>(())
     });
 
     let state = AppState {
         about_template,
+        not_found_template,
         posts,
         root_template,
     };
@@ -387,7 +412,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(get_root))
         .route("/about", get(get_about))
-        .route("/posts/:id", get(get_post))
+        .route("/posts/:id", get(get_post).delete(delete_post))
         .route("/post", post(upload_post))
         .nest_service("/public", serve_dir)
         .fallback(handler_404)
@@ -404,8 +429,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handler_404() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, "nothing to see here")
+async fn handler_404(State(state): State<AppState>) -> impl IntoResponse {
+    let not_found = state.not_found_template.lock().await;
+
+    (StatusCode::NOT_FOUND, Html(not_found.to_owned()))
 }
 
 async fn handle_error(_err: Error) -> impl IntoResponse {
@@ -469,19 +496,21 @@ async fn generate_initial_templates(
         }
     }
 
-    // Unlock the mutex since we need it in the next call.
+    // Unlock the mutex to avoid a deadlock.
     drop(posts);
 
+    let not_found_template = get_rendered_template(&sender, TemplateKind::NotFound).await?;
     let root_template = get_rendered_template(&sender, TemplateKind::Root).await?;
 
     Ok(InitialTemplates {
         about_template,
+        not_found_template,
         root_template,
     })
 }
 
 async fn get_post(
-    Path(GetPostParams { id }): Path<GetPostParams>,
+    Path(PostParams { id }): Path<PostParams>,
     State(state): State<AppState>,
 ) -> Html<String> {
     let posts_guard = state.posts.lock().await;
@@ -490,7 +519,33 @@ async fn get_post(
     if let Some(post) = maybe_post {
         Html(post.rendered_template.to_owned())
     } else {
-        Html("TODO NO POST FOUND".to_owned())
+        let not_found = state.not_found_template.lock().await;
+
+        Html(not_found.to_owned())
+    }
+}
+
+async fn delete_post(
+    Path(PostParams { id }): Path<PostParams>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let mut posts_guard = state.posts.lock().await;
+
+    match posts_guard.remove(&id) {
+        Some(_) => {
+            let mut filename = PathBuf::new();
+            filename.push(id);
+            filename.set_extension("md");
+
+            let file_path = StdPath::new("./posts").join(filename);
+
+            remove_file(file_path)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+            Ok(StatusCode::OK)
+        }
+        None => Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
     }
 }
 
@@ -523,7 +578,6 @@ fn get_markdown_file_name(filename: &str) -> Option<&str> {
     None
 }
 
-/// TODO
 /// https://docs.rs/axum/latest/src/axum/extract/multipart.rs.html#248
 async fn upload_post(mut multipart: Multipart) -> Result<StatusCode, (StatusCode, String)> {
     tracing::info!("Uploading post...");
