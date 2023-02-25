@@ -13,7 +13,7 @@ pub(crate) async fn get_post(
     let maybe_post = posts_guard.get(&id);
 
     if let Some(post) = maybe_post {
-        Html(post.rendered_template.to_owned())
+        Html(post.rendered_template.clone())
     } else {
         let not_found = state.not_found_template.lock().await;
 

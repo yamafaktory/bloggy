@@ -59,7 +59,7 @@ pub(crate) async fn templates_manager(
                 TemplateKind::NotFound => {
                     let rendered_template = template
                         .render(context!(
-                            contents => contents_to_markdown("# 404\nPage not found.".to_owned()),
+                            contents => contents_to_markdown("# 404\nPage not found."),
                             is_root => false,
                             public => "/public/",
                             title => "404",
@@ -71,7 +71,7 @@ pub(crate) async fn templates_manager(
                 TemplateKind::Post(PostTemplate { contents, title }) => {
                     let rendered_template = template
                         .render(context!(
-                            contents => contents_to_markdown(contents),
+                            contents => contents_to_markdown(&contents),
                             is_root => false,
                             public => "/public/",
                             title,
@@ -90,8 +90,8 @@ pub(crate) async fn templates_manager(
                         .map(|(original_name, post)| PreviewPost {
                             date: post.created.get(),
                             description: "todo".to_owned(),
-                            encoded_name: post.encoded_name.to_owned(),
-                            original_name: original_name.to_owned(),
+                            encoded_name: post.encoded_name.clone(),
+                            original_name: original_name.clone(),
                         })
                         .collect::<Vec<PreviewPost>>();
 
@@ -140,7 +140,7 @@ pub(crate) async fn generate_initial_templates(
         let file_name = dir_entry.file_name();
 
         let (encoded_name, original_name) =
-            get_file_descriptor_from_paths(vec![Path::new(&file_name)]).map_or(
+            get_file_descriptor_from_paths(&[Path::new(&file_name)]).map_or(
                 ("unnamed".to_owned(), "unnamed".to_owned()),
                 |FileDescriptor {
                      encoded_name,
@@ -155,7 +155,7 @@ pub(crate) async fn generate_initial_templates(
             &sender,
             TemplateKind::Post(PostTemplate {
                 contents,
-                title: original_name.to_owned(),
+                title: original_name.clone(),
             }),
         )
         .await?;

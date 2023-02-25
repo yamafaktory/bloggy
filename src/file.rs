@@ -13,7 +13,7 @@ pub(crate) struct FileDescriptor {
 
 /// Gets the file descriptor from the provided paths.
 /// Returns the URI encoded file name and the path.
-pub(crate) fn get_file_descriptor_from_paths<P>(paths: Vec<P>) -> Option<FileDescriptor>
+pub(crate) fn get_file_descriptor_from_paths<P>(paths: &[P]) -> Option<FileDescriptor>
 where
     P: AsRef<Path>,
 {

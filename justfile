@@ -7,5 +7,5 @@ test-delete:
 test-upload:
   touch test.md
   echo -e "# Title\nthis is a test 🍰!" > test.md
-  curl -i --insecure --form file='@test.md' https://localhost:3443/post
+  curl -i --insecure --form file='@test.md' https://localhost:3443/post -H 'Authorization: Bearer TODO'
 

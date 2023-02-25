@@ -58,7 +58,7 @@ where
                         encoded_name,
                         original_name,
                         path_buf,
-                    }) = get_file_descriptor_from_paths(event.paths)
+                    }) = get_file_descriptor_from_paths(&event.paths)
                     {
                         let mut file = File::open(path_buf).await?;
                         let mut contents = vec![];
@@ -78,7 +78,7 @@ where
                             .send((
                                 TemplateKind::Post(PostTemplate {
                                     contents,
-                                    title: original_name.to_owned(),
+                                    title: original_name.clone(),
                                 }),
                                 tx,
                             ))
@@ -90,12 +90,7 @@ where
 
                         posts.insert(
                             original_name,
-                            Post {
-                                created,
-                                encoded_name,
-                                modified,
-                                rendered_template,
-                            },
+                            Post::new(created, encoded_name, modified, rendered_template),
                         );
 
                         // Unlock the mutex to avoid a deadlock.

@@ -6,7 +6,7 @@ use comrak::{
 };
 use syntect::highlighting::ThemeSet;
 
-pub(crate) fn contents_to_markdown(contents: String) -> String {
+pub(crate) fn contents_to_markdown(contents: &str) -> String {
     let adapter_builder = SyntectAdapterBuilder::new();
     let mut options = ComrakOptions::default();
     let mut plugins = ComrakPlugins::default();
@@ -24,7 +24,7 @@ pub(crate) fn contents_to_markdown(contents: String) -> String {
 
     plugins.render.codefence_syntax_highlighter = Some(&adapter);
 
-    markdown_to_html_with_plugins(&contents, &options, &plugins)
+    markdown_to_html_with_plugins(contents, &options, &plugins)
 }
 
 pub(crate) fn get_markdown_file_name(filename: &str) -> Option<&str> {

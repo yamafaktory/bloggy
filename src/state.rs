@@ -32,9 +32,25 @@ impl fmt::Display for MaybeSystemTime {
 #[derive(Debug)]
 pub(crate) struct Post {
     pub(crate) created: MaybeSystemTime,
-    pub(crate) modified: MaybeSystemTime,
     pub(crate) encoded_name: String,
+    pub(crate) modified: MaybeSystemTime,
     pub(crate) rendered_template: String,
+}
+
+impl Post {
+    pub(crate) fn new(
+        created: MaybeSystemTime,
+        encoded_name: String,
+        modified: MaybeSystemTime,
+        rendered_template: String,
+    ) -> Self {
+        Self {
+            created,
+            encoded_name,
+            modified,
+            rendered_template,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,4 +59,20 @@ pub(crate) struct AppState {
     pub(crate) not_found_template: Arc<Mutex<String>>,
     pub(crate) posts: Arc<Mutex<HashMap<String, Post>>>,
     pub(crate) root_template: Arc<Mutex<String>>,
+}
+
+impl AppState {
+    pub(crate) fn new(
+        about_template: Arc<Mutex<String>>,
+        not_found_template: Arc<Mutex<String>>,
+        posts: Arc<Mutex<HashMap<String, Post>>>,
+        root_template: Arc<Mutex<String>>,
+    ) -> Self {
+        Self {
+            about_template,
+            not_found_template,
+            posts,
+            root_template,
+        }
+    }
 }

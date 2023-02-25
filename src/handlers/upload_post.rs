@@ -5,12 +5,10 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use crate::markdown::get_markdown_file_name;
 
-/// https://docs.rs/axum/latest/src/axum/extract/multipart.rs.html#248
+/// See the [multipart documentation](https://docs.rs/axum/latest/src/axum/extract/multipart.rs.html#248).
 pub(crate) async fn upload_post(
     mut multipart: Multipart,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    tracing::info!("Uploading post...");
-
     while let Some(field) = multipart
         .next_field()
         .await
