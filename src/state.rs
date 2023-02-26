@@ -33,7 +33,6 @@ impl fmt::Display for MaybeSystemTime {
 pub(crate) struct Post {
     pub(crate) created: MaybeSystemTime,
     pub(crate) encoded_name: String,
-    pub(crate) modified: MaybeSystemTime,
     pub(crate) rendered_template: String,
 }
 
@@ -41,13 +40,11 @@ impl Post {
     pub(crate) fn new(
         created: MaybeSystemTime,
         encoded_name: String,
-        modified: MaybeSystemTime,
         rendered_template: String,
     ) -> Self {
         Self {
             created,
             encoded_name,
-            modified,
             rendered_template,
         }
     }

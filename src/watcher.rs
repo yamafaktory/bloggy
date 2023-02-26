@@ -69,7 +69,6 @@ where
 
                         let metadata = file.metadata().await?;
                         let created = MaybeSystemTime::new(metadata.created().ok());
-                        let modified = MaybeSystemTime::new(metadata.modified().ok());
 
                         let contents = String::from_utf8_lossy(&contents).into_owned();
 
@@ -90,7 +89,7 @@ where
 
                         posts.insert(
                             original_name,
-                            Post::new(created, encoded_name, modified, rendered_template),
+                            Post::new(created, encoded_name, rendered_template),
                         );
 
                         // Unlock the mutex to avoid a deadlock.

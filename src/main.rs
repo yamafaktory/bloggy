@@ -2,7 +2,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(rust_2021_compatibility)]
 #![warn(missing_debug_implementations, missing_docs, unreachable_pub)]
-#![deny(clippy::pedantic)]
+#![deny(clippy::pedantic, clippy::clone_on_ref_ptr)]
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
@@ -30,26 +30,26 @@ async fn main() -> Result<()> {
     // Initialize tracing.
     tracing_subscriber::fmt::init();
 
-    // Add certificate.
-    let config = RustlsConfig::from_pem_file("./certificate.pem", "./key.pem").await?;
+    // Add certificate and private key.
+    let config = RustlsConfig::from_pem_file("./cert/certificate.pem", "./cert/key.pem").await?;
 
     let posts = Arc::new(Mutex::new(HashMap::<String, Post>::new()));
 
-    let sender = templates_manager(posts.clone()).await?;
+    let sender = templates_manager(Arc::clone(&posts)).await?;
 
     // Get all templates.
     let InitialTemplates {
         about_template,
         not_found_template,
         root_template,
-    } = generate_initial_templates(posts.clone(), sender.clone()).await?;
+    } = generate_initial_templates(Arc::clone(&posts), sender.clone()).await?;
 
     let about_template = Arc::new(Mutex::new(about_template));
     let not_found_template = Arc::new(Mutex::new(not_found_template));
     let root_template = Arc::new(Mutex::new(root_template));
 
-    let posts_clone = posts.clone();
-    let root_template_clone = root_template.clone();
+    let posts_clone = Arc::clone(&posts);
+    let root_template_clone = Arc::clone(&root_template);
 
     // Spawn the watcher task.
     tokio::spawn(async move {
@@ -67,6 +67,6 @@ async fn main() -> Result<()> {
     axum_server::bind_rustls(addr, config)
         .serve(create_app(state).into_make_service())
         .await?;
-
+    dbg!(34);
     Ok(())
 }

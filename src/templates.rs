@@ -136,7 +136,7 @@ pub(crate) async fn generate_initial_templates(
     while let Some(dir_entry) = posts_stream.next_entry().await? {
         let metadata = dir_entry.metadata().await?;
         let created = MaybeSystemTime::new(metadata.created().ok());
-        let modified = MaybeSystemTime::new(metadata.modified().ok());
+        let _modified = MaybeSystemTime::new(metadata.modified().ok());
         let file_name = dir_entry.file_name();
 
         let (encoded_name, original_name) =
@@ -168,7 +168,6 @@ pub(crate) async fn generate_initial_templates(
                 Post {
                     created,
                     encoded_name,
-                    modified,
                     rendered_template,
                 },
             );
