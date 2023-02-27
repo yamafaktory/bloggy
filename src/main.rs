@@ -60,13 +60,13 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(about_template, not_found_template, posts, root_template);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3443));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3443));
 
     tracing::debug!("listening on {}", addr);
 
     axum_server::bind_rustls(addr, config)
         .serve(create_app(state).into_make_service())
         .await?;
-    dbg!(34);
+
     Ok(())
 }

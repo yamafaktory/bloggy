@@ -1,6 +1,12 @@
 create-self-signed-ssl-certificate:
   openssl req -newkey rsa:2048 -nodes -keyout ./cert/key.pem -x509 -days 365 -out ./cert/certificate.pem
 
+docker-build:
+  docker buildx build -t test .
+
+docker-run:
+  docker run --init -P test
+
 test-delete:
   curl -i --insecure -X DELETE https://localhost:3443/api/posts/test -H 'Authorization: Bearer TODO'
 
